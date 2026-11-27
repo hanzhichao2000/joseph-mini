@@ -538,6 +538,52 @@ def test_relative_xdg_uses_home_config_from_different_working_directories(tmp_pa
         assert json.loads(result.stdout)["config"]["JOSEPH_MINI_MODE"] == "paper"
 
 
+def test_empty_xdg_uses_home_config_from_different_working_directories(tmp_path):
+    home = tmp_path / "home"
+    config = home / ".config" / "joseph" / ".env"
+    config.parent.mkdir(parents=True)
+    config.write_text("JOSEPH_MINI_MODE=paper\n")
+    config.chmod(0o600)
+    for name in ("first", "second"):
+        cwd = tmp_path / name
+        decoy = cwd / "joseph" / ".env"
+        decoy.parent.mkdir(parents=True)
+        decoy.write_text("JOSEPH_MINI_MODE=normal\n")
+        decoy.chmod(0o600)
+        result = subprocess.run(
+            [str(Path(sys.executable).with_name("joseph-mini")), "runtime-check", "--json"],
+            cwd=cwd,
+            env=env_for(home, XDG_CONFIG_HOME=""),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0
+        assert json.loads(result.stdout)["config"]["JOSEPH_MINI_MODE"] == "paper"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX file permissions required")
+def test_host_rejects_shared_file_when_secure_access_unavailable(tmp_path):
+    write_config(tmp_path, f"JOSEPH_MINI_ACCESS_KEY={CANARY}\n")
+    code = """import joseph_api.env
+from joseph_mini import cli
+joseph_api.env._supports_secure_file_reading = lambda: False
+raise SystemExit(cli.main(['runtime-check', '--json']))
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        env=env_for(tmp_path),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if CANARY in result.stdout + result.stderr:
+        pytest.fail("Sensitive value leaked", pytrace=False)
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert "Secure shared file access unavailable" in result.stderr
+
+
 @pytest.mark.skipif(os.name != "posix", reason="POSIX file permissions required")
 def test_active_secret_in_unsafe_shared_file_is_rejected_without_leak_or_chmod(tmp_path):
     path = write_config(tmp_path, f"JOSEPH_MINI_ACCESS_KEY={CANARY}\n")
