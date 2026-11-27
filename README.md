@@ -10,7 +10,8 @@ Route A (dismantle-and-adopt), Project `joseph-build` #6:
   ownership, the exact commit, how existing entry points migrate, and what ran in isolation.
 - A unit counts as adopted only when the clean-environment proof passes: install and start without
   the package, then install it and verify every supported entry point and must-run test.
-- QT5m formal replay lives here once adopted; the pilot repo only holds hypothesis experiments.
+- Strategy-specific replay and experimentation remain in `joseph-sandbox-dx`; mini owns only
+  reusable execution and venue-simulator contracts.
 
 Boundaries:
 
