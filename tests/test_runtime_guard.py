@@ -54,8 +54,56 @@ def aliases_are_prefixed(source):
             return isinstance(value.value, str) and value.value.startswith("JOSEPH_MINI_")
         return False
 
+    def is_os_attr(value, name):
+        return (
+            isinstance(value, ast.Attribute)
+            and value.attr == name
+            and isinstance(value.value, ast.Name)
+            and value.value.id == "os"
+        )
+
+    def approved_env(value):
+        if not isinstance(value, ast.Constant) or not isinstance(value.value, str):
+            return False
+        name = value.value
+        return (
+            not name.startswith("JOSEPH_")
+            or name.startswith("JOSEPH_MINI_")
+            or name == "JOSEPH_PROGRESS"
+        )
+
     for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Subscript)
+            and is_os_attr(node.value, "environ")
+            and not approved_env(node.slice)
+        ):
+            return False
         if isinstance(node, ast.Call):
+            is_getenv = is_os_attr(node.func, "getenv")
+            is_environ_get = (
+                isinstance(node.func, ast.Attribute)
+                and node.func.attr == "get"
+                and is_os_attr(node.func.value, "environ")
+            )
+            if is_getenv or is_environ_get:
+                if node.args:
+                    if (
+                        not approved_env(node.args[0])
+                        or len(node.args) > 2
+                        or (node.keywords and len(node.args) != 1)
+                        or len(node.keywords) > 1
+                        or any(keyword.arg != "default" for keyword in node.keywords)
+                    ):
+                        return False
+                else:
+                    keywords = {keyword.arg: keyword.value for keyword in node.keywords}
+                    if (
+                        len(keywords) != len(node.keywords)
+                        or set(keywords) not in ({"key"}, {"key", "default"})
+                        or not approved_env(keywords["key"])
+                    ):
+                        return False
             is_field = (isinstance(node.func, ast.Name) and node.func.id == "Field") or (
                 isinstance(node.func, ast.Attribute) and node.func.attr == "Field"
             )
@@ -80,6 +128,68 @@ def aliases_are_prefixed(source):
 )
 def test_field_expanded_kwargs_fail_closed(source):
     assert not aliases_are_prefixed(source)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "os.getenv('JOSEPH_OTHER_X')",
+        "os.environ.get('JOSEPH_OTHER_X')",
+        "os.environ['JOSEPH_OTHER_X']",
+        "os.getenv(name)",
+        "os.environ.get(name)",
+        "os.environ[name]",
+        "os.getenv(key='JOSEPH_OTHER_X')",
+        "os.environ.get(key='JOSEPH_OTHER_X')",
+        "os.getenv(key=name)",
+        "os.environ.get(key=name)",
+        "os.getenv('JOSEPH_OTHER_X', key='CI')",
+        "os.environ.get('JOSEPH_OTHER_X', key='CI')",
+        "os.getenv(**kwargs)",
+        "os.environ.get(**kwargs)",
+        "os.getenv(key='JOSEPH_OTHER_X', default='x')",
+        "os.environ.get(key='JOSEPH_OTHER_X', default='x')",
+        "os.getenv(key=name, default='x')",
+        "os.environ.get(key='CI', default='x', extra=1)",
+        "os.getenv(key='CI', **kwargs)",
+        "os.getenv('CI', **kwargs)",
+        "os.environ.get('CI', other=1)",
+        "os.getenv('CI', 'x', default='y')",
+        "os.environ.get('CI', 'x', default='y')",
+        "os.getenv('CI', 'x', 'y')",
+        "os.environ.get('CI', 'x', 'y')",
+    ],
+)
+def test_direct_environment_access_rejects_unapproved_or_dynamic_names(source):
+    assert not aliases_are_prefixed(source)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "os.getenv('JOSEPH_MINI_X')",
+        "os.environ.get('JOSEPH_PROGRESS')",
+        "os.environ['HOME']",
+        "os.getenv(key='CI')",
+        "os.getenv(key='JOSEPH_MINI_X')",
+        "os.getenv(key='JOSEPH_PROGRESS')",
+        "os.environ.get(key='CI')",
+        "os.environ.get(key='JOSEPH_MINI_X')",
+        "os.environ.get(key='JOSEPH_PROGRESS')",
+        "os.getenv(key='CI', default='x')",
+        "os.environ.get(key='CI', default='x')",
+        "os.getenv(key='JOSEPH_MINI_X', default='x')",
+        "os.environ.get(key='JOSEPH_MINI_X', default='x')",
+        "os.getenv(key='JOSEPH_PROGRESS', default='x')",
+        "os.environ.get(key='JOSEPH_PROGRESS', default='x')",
+        "os.getenv('CI', 'x')",
+        "os.environ.get('CI', 'x')",
+        "os.getenv('CI', default='x')",
+        "os.environ.get('CI', default='x')",
+    ],
+)
+def test_direct_environment_access_allows_approved_names(source):
+    assert aliases_are_prefixed(source)
 
 
 def test_env_prefix_guard(tmp_path):
