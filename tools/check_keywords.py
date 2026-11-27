@@ -46,6 +46,11 @@ def main(keywords: Path, root: Path) -> int:
             and not name.endswith(".egg-info")
             and not name.endswith(".cache")
         ]
+        for name in dirs + files:
+            path = Path(directory) / name
+            if any(term in str(path.relative_to(root)).casefold() for term in terms):
+                print(f"keyword match: {path}", file=sys.stderr)
+                failed = True
         for name in files:
             path = Path(directory) / name
             if name == ".git" or path.is_symlink():
