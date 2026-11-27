@@ -100,3 +100,16 @@ def test_current_repository_has_no_public_keywords():
         pytest.skip("docs-public checkout is supplied by CI")
     result = run_guard(lists, ROOT)
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("path", ["src/QT" + "5m.py", "src/synthetic_vendor_marker/module.py"])
+def test_public_path_rejects_keyword(lists, tmp_path, path):
+    root = tmp_path / "repo"
+    (root / "src").mkdir(parents=True)
+    (root / "pyproject.toml").write_text("[project]\n")
+    target = root / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("pass\n")
+    result = run_guard(lists, root)
+    assert result.returncode != 0
+    assert "keyword match" in result.stderr
