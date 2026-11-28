@@ -6,11 +6,12 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 GUARD = ROOT / "tools" / "check_keywords.py"
+MARKER = "synthetic-internal-marker"
 
 
-def run_guard(lists, root):
+def run_guard(keywords, root):
     return subprocess.run(
-        [sys.executable, str(GUARD), str(lists), str(root)],
+        [sys.executable, str(GUARD), str(keywords), str(root)],
         capture_output=True,
         text=True,
         check=False,
@@ -18,98 +19,81 @@ def run_guard(lists, root):
 
 
 @pytest.fixture
-def lists(tmp_path):
-    directory = tmp_path / "lists"
-    directory.mkdir()
-    for filename, term in (
-        ("private-paths.txt", "/synthetic/private/path"),
-        ("proprietary-strategies.txt", "QT" + "5m"),
-        ("vendor.txt", "synthetic_vendor_marker"),
-    ):
-        (directory / filename).write_text(term + "\n")
-    return directory
+def keywords(tmp_path):
+    path = tmp_path / "keywords.txt"
+    path.write_text(MARKER + "\n")
+    return path
 
 
-@pytest.mark.parametrize(
-    "path,content",
-    [
-        ("src/package/nested/strategy.py", "QT" + "5m = 'strategy specific'"),
-        ("tests/nested/test_sample.py", "synthetic_vendor_marker"),
-        ("tools/nested/sample.py", "/synthetic/private/path"),
-        (".github/workflows/ci.yml", "synthetic_vendor_marker"),
-        ("pyproject.toml", "synthetic_vendor_marker"),
-        ("README.md", "/synthetic/private/path"),
-    ],
-)
-def test_public_text_rejects_keyword(lists, tmp_path, path, content):
+@pytest.fixture
+def repo(tmp_path):
     root = tmp_path / "repo"
-    (root / "src").mkdir(parents=True)
-    (root / "pyproject.toml").write_text("[project]\n")
+    root.mkdir()
+    subprocess.run(["git", "-C", root, "init", "-q"], check=True)
+    return root
+
+
+def track(root, path, content):
     target = root / path
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content)
-    result = run_guard(lists, root)
-    assert result.returncode != 0
-    assert "keyword match" in result.stderr
-    assert path in result.stderr
+    subprocess.run(["git", "-C", root, "add", "--", path], check=True)
 
 
-def test_clean_tree_passes(lists, tmp_path):
-    root = tmp_path / "repo"
-    (root / "src").mkdir(parents=True)
-    (root / "pyproject.toml").write_text("[project]\n")
-    (root / "README.md").write_text("public text")
-    assert run_guard(lists, root).returncode == 0
+@pytest.mark.parametrize(
+    "path",
+    [
+        "src/package/nested/example.py",
+        "tests/test_fixture.py",
+        "tools/nested/sample.py",
+        ".github/workflows/ci.yml",
+        "pyproject.toml",
+        "README.md",
+    ],
+)
+def test_public_text_rejects_keyword(keywords, repo, path):
+    track(repo, path, MARKER.upper())
+    result = run_guard(keywords, repo)
+    assert result.returncode == 1
+    assert "(0 path, 1 text matches)" in result.stderr
+    assert MARKER not in result.stderr.casefold()
 
 
-def test_missing_list_fails(lists, tmp_path):
-    (lists / "vendor.txt").unlink()
-    (tmp_path / "src").mkdir()
-    (tmp_path / "pyproject.toml").write_text("[project]\n")
-    result = run_guard(lists, tmp_path)
-    assert result.returncode != 0
-    assert "keyword list unavailable" in result.stderr
+def test_clean_tree_passes(keywords, repo):
+    track(repo, "README.md", "public text")
+    assert run_guard(keywords, repo).returncode == 0
 
 
-def test_missing_root_fails(lists, tmp_path):
-    result = run_guard(lists, tmp_path / "missing")
-    assert result.returncode != 0
-    assert "scan root" in result.stderr
+@pytest.mark.parametrize("invalid", [None, "", "# comment\n  \n"])
+def test_list_is_required_and_nonempty(keywords, repo, invalid):
+    if invalid is None:
+        keywords.unlink()
+    else:
+        keywords.write_text(invalid)
+    result = run_guard(keywords, repo)
+    assert result.returncode == 2
+    assert "list missing, unreadable, or empty" in result.stderr
 
 
-def test_empty_list_fails(lists, tmp_path):
-    (lists / "vendor.txt").write_text("# empty\n")
-    (tmp_path / "src").mkdir()
-    (tmp_path / "pyproject.toml").write_text("[project]\n")
-    result = run_guard(lists, tmp_path)
-    assert result.returncode != 0
-    assert "keyword list empty" in result.stderr
-
-
-def test_wrong_root_fails(lists, tmp_path):
-    root = tmp_path / "repo"
-    root.mkdir()
-    result = run_guard(lists, root)
-    assert result.returncode != 0
-    assert "scan root" in result.stderr
+@pytest.mark.parametrize("kind", ["missing", "not-a-repository"])
+def test_invalid_root_fails(keywords, tmp_path, kind):
+    root = tmp_path / kind
+    if kind == "not-a-repository":
+        root.mkdir()
+    result = run_guard(keywords, root)
+    assert result.returncode == 2
+    assert "target Git working tree" in result.stderr
 
 
 def test_current_repository_has_no_public_keywords():
-    lists = ROOT / ".boundary-docs" / "keywords"
-    if not lists.exists():
-        pytest.skip("docs-public checkout is supplied by CI")
-    result = run_guard(lists, ROOT)
+    result = run_guard(ROOT / "keywords/public-boundary.txt", ROOT)
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.parametrize("path", ["src/QT" + "5m.py", "src/synthetic_vendor_marker/module.py"])
-def test_public_path_rejects_keyword(lists, tmp_path, path):
-    root = tmp_path / "repo"
-    (root / "src").mkdir(parents=True)
-    (root / "pyproject.toml").write_text("[project]\n")
-    target = root / path
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text("pass\n")
-    result = run_guard(lists, root)
-    assert result.returncode != 0
-    assert "keyword match" in result.stderr
+@pytest.mark.parametrize("path", [f"src/{MARKER}.py", f"src/{MARKER}/module.py"])
+def test_public_path_rejects_keyword(keywords, repo, path):
+    track(repo, path, "pass\n")
+    result = run_guard(keywords, repo)
+    assert result.returncode == 1
+    assert "(1 path, 0 text matches)" in result.stderr
+    assert MARKER not in result.stderr

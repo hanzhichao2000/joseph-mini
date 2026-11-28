@@ -20,3 +20,10 @@ Boundaries:
 - The venue-simulator contract is public; its tick implementation is private (`joseph-native`).
 - `joseph-live` wraps vn.py's EventEngine and gateways; it never owns JO orders.
 - Evidence attaches to GitHub Issues as run manifests; no report trees in this repository.
+
+## Reproduce the public boundary check
+
+Run `python3 tools/check_keywords.py keywords/public-boundary.txt .`.
+Run the checker from a clean checkout to reproduce CI. It reads paths from the
+Git index and content from the working tree. A run with local changes cannot
+verify the staged snapshot.
